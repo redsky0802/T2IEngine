@@ -1,0 +1,30 @@
+[model]
+# 模型架构标识，支持 zit / k2t
+model_type = "zit"
+# 本地模型绝对路径或 HuggingFace 仓库名
+# model_id = "Tongyi-MAI/Z-Image-Turbo"
+model_id = "/home/redsky/ai/zit-bf16"
+
+[generation]
+# 官方推荐原生输出分辨率 (1024x1024)
+width = 1024
+height = 1024
+
+# 批次与随机数种子配置
+# count: 每条 prompt 生成的批次数
+# seeds: 缺省或为空列表时，运行时会自动取毫秒时间戳随机生成并在完成时回填归档
+count = 1
+seeds = [42]
+
+# Z-Image-Turbo 为 8NFEs 极速蒸馏模型，推荐采样步数为 8
+steps = 8
+
+# 图片与归档配置文件落盘目录
+outdir = "./outputs"
+
+# 文件名前缀，落盘格式对应为: {prefix}-{seed}-{key}.png 及 {prefix}.toml
+prefix = "zit"
+
+[prompts]
+
+"sample" = """Young Chinese woman in red Hanfu, intricate embroidery. Impeccable makeup, red floral forehead pattern. Elaborate high bun, golden phoenix headdress, red flowers, beads. Holds round folding fan with lady, trees, bird. Neon lightning-bolt lamp (⚡️), bright yellow glow, above extended left palm. Soft-lit outdoor night background, silhouetted tiered pagoda (西安大雁塔), blurred colorful distant lights."""
