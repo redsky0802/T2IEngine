@@ -1,0 +1,6 @@
+diffusers
+transformers
+accelerate
+# flash_attn
+psutil
+tomli_w
