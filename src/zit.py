@@ -8,7 +8,6 @@ import pstats
 import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import torch
@@ -16,16 +15,18 @@ import torch
 from base import BasePipeline
 from config import CompileMode, ModelType, OffloadStrategy, PipelineConfig
 from utils import (
-    calculate_vae_batch_size,
     detach_mmap_tensors,
+    vacuum_memory,
     inject_complex_probe,
     resolve_attention_backend,
-    vacuum_memory,
+    calculate_vae_batch_size,
+    save_image_task,
 )
 
 if TYPE_CHECKING:
     from diffusers.pipelines.z_image.pipeline_output import ZImagePipelineOutput
     from diffusers.pipelines.z_image.pipeline_z_image import ZImagePipeline
+    from pathlib import Path
     from PIL import Image
 
 # 获得当前模块独立的 Logger 实例 (依赖标准库层级冒泡)
@@ -578,16 +579,6 @@ class ZitPipeline(BasePipeline, model_type=ModelType.ZIT):
         save_futures: list[Future[None]] = []
         total_samples: int = len(latents_buffer)
 
-        def _save_image_task(
-            img: Image.Image, out_path: Path, out_file: str, dec_cost: float
-        ) -> None:
-            """后台线程异步执行 PNG 压缩与落盘 (Pillow 底层 libpng 自动释放 GIL)"""
-            t0 = time.time()
-            img.save(out_path)
-            logger.info(
-                f"{out_file} 保存完成 | GPU均摊解码: {dec_cost:.2f}s | 异步I/O: {time.time() - t0:.2f}s"
-            )
-
         def _decode_latent_batch(
             batch_items: list[tuple[int, str, torch.Tensor]],
         ) -> list[Image.Image]:
@@ -615,7 +606,7 @@ class ZitPipeline(BasePipeline, model_type=ModelType.ZIT):
         io_workers: int = min(os.cpu_count() or 1, total_samples)
         # 计算并行解码数（经验公式： 1.25GB / 图）
         vae_batch_size: int = calculate_vae_batch_size(total_samples)
-        logger.info(f"VAE解码并行度: batch_size={vae_batch_size}")
+        logger.info(f"VAE解码并行度: batch_size = {vae_batch_size}")
 
         with ThreadPoolExecutor(max_workers=io_workers) as io_pool, torch.inference_mode():
             for i in range(0, total_samples, vae_batch_size):
@@ -623,17 +614,18 @@ class ZitPipeline(BasePipeline, model_type=ModelType.ZIT):
                 batch_items = latents_buffer[i : i + vae_batch_size]
 
                 images = _decode_latent_batch(batch_items)
-                avg_cost = (time.time() - t_dec) / len(images)
+                logger.debug(
+                    f"VAE并行解码批次 {i // vae_batch_size + 1} 完成 | 耗时: {time.time() - t_dec:.2f}s"
+                )
 
                 for (current_seed, key, _), img in zip(batch_items, images):
-                    out_file: str = cfg.format_filename(current_seed, key)
                     save_futures.append(
                         io_pool.submit(
-                            _save_image_task,
+                            save_image_task,
                             img,
-                            cfg.outdir / out_file,
-                            out_file,
-                            avg_cost,
+                            cfg,
+                            current_seed,
+                            key,
                         )
                     )
 
@@ -642,7 +634,7 @@ class ZitPipeline(BasePipeline, model_type=ModelType.ZIT):
             fut.result()
 
         pipe.vae.to("cpu")
-        del latents_buffer
+        del latents_buffer, save_futures
         # pipe.remove_hook()
         vacuum_memory()
         logger.info(

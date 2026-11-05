@@ -4,12 +4,17 @@ import ctypes
 import gc
 import logging
 import os
+import time
 from importlib.util import find_spec
+from pathlib import Path
+from PIL import Image
 from typing import TYPE_CHECKING, Any, Callable
 
 import psutil
 import torch
 import torch.nn as nn
+
+from config import PipelineConfig
 
 if TYPE_CHECKING:
     from diffusers.pipelines.pipeline_utils import DiffusionPipeline
@@ -68,53 +73,6 @@ def vacuum_memory() -> None:
         )
     else:
         logger.debug(f"内存回收完毕 | 进程 RAM: {ram_rss_mb:.0f} MB")
-
-
-def calculate_vae_batch_size(
-    num_samples: int,
-    unit_cost_gb: float = 1.25,
-    max_cap: int = 8,
-) -> int:
-    """根据运行时环境划定系统保留显存，基于 512-Tiling 单图 ~1.25GB 成本计算最优 Batch Size。
-
-    :param num_samples: 待解码的潜变量总数量 (len(latents_buffer))
-    :param unit_cost_gb: 512-Tiling 规格下单张图片分配器预留成本 (默认 1.25 GB)
-    :param max_cap: 批次上限 (防止批次过大导致 CPU 异步落盘队列积压内存)
-    :return: 规整到 2 的幂次的最优 batch_size (1, 2, 4, 8...)
-    """
-    if num_samples <= 1:
-        return 1
-
-    # 1. 探测硬件总显存与当前驱动层空闲显存
-    free_bytes, total_bytes = torch.cuda.mem_get_info()
-    free_gb: float = free_bytes / (1024**3)
-    total_gb: float = total_bytes / (1024**3)
-
-    # 2. 划定系统保留 (Headroom Reserve)
-    # WSL2 环境必须防范 WDDM 换页挤压 DWM；原生 Linux 仅需覆盖极低桌面底噪
-    is_wsl: bool = os.path.exists("/dev/dxg")
-    system_reserve_gb: float = 3.5 if is_wsl else 1.5
-
-    # 3. 计入 PyTorch 缓存池内部已圈占但处于空闲的内存 (Pooled Free)
-    pooled_free_gb: float = (
-        torch.cuda.memory_reserved() - torch.cuda.memory_allocated()
-    ) / (1024**3)
-
-    # 4. 计算业务实际可用的安全显存净值
-    usable_gb: float = max(
-        0.0, (free_gb + pooled_free_gb) - system_reserve_gb
-    )
-
-    # 5. 计算理论批次大小：可用空间 // 单张成本 (1.25 GB)
-    raw_bs: int = int(usable_gb // unit_cost_gb)
-
-    # 6. 受上限与剩余样本数截断，并用位运算对齐到 2 的幂次 (1, 2, 4, 8...)
-    target_bs: int = min(raw_bs, max_cap, num_samples)
-    if target_bs <= 1:
-        return 1
-
-    # 取 <= target_bs 的最大 2 的幂次 (例: 7 -> 4, 4 -> 4, 3 -> 2)
-    return 1 << (target_bs.bit_length() - 1)
 
 
 def inject_complex_probe(pipe: DiffusionPipeline) -> Callable[[], None] | None:
@@ -182,3 +140,75 @@ def resolve_attention_backend() -> str:
         return "flash"
     logger.debug("未检测到 flash_attn，Attention 后端已自动回退至 _native_flash")
     return "_native_flash"
+
+
+def calculate_vae_batch_size(
+    num_samples: int,
+    unit_cost_gb: float = 1.25,
+    max_cap: int = 8,
+) -> int:
+    """根据运行时环境划定系统保留显存，基于 512-Tiling 单图 ~1.25GB 成本计算最优 Batch Size。
+
+    :param num_samples: 待解码的潜变量总数量 (len(latents_buffer))
+    :param unit_cost_gb: 512-Tiling 规格下单张图片分配器预留成本 (默认 1.25 GB)
+    :param max_cap: 批次上限 (防止批次过大导致 CPU 异步落盘队列积压内存)
+    :return: 规整到 2 的幂次的最优 batch_size (1, 2, 4, 8...)
+    """
+    if num_samples <= 1:
+        return 1
+
+    # 1. 探测硬件总显存与当前驱动层空闲显存
+    free_bytes, total_bytes = torch.cuda.mem_get_info()
+    free_gb: float = free_bytes / (1024**3)
+    total_gb: float = total_bytes / (1024**3)
+
+    # 2. 划定系统保留 (Headroom Reserve)
+    # WSL2 环境必须防范 WDDM 换页挤压 DWM；原生 Linux 仅需覆盖极低桌面底噪
+    is_wsl: bool = os.path.exists("/dev/dxg")
+    system_reserve_gb: float = 3.5 if is_wsl else 1.5
+
+    # 3. 计入 PyTorch 缓存池内部已圈占但处于空闲的内存 (Pooled Free)
+    pooled_free_gb: float = (
+        torch.cuda.memory_reserved() - torch.cuda.memory_allocated()
+    ) / (1024**3)
+
+    # 4. 计算业务实际可用的安全显存净值
+    usable_gb: float = max(
+        0.0, (free_gb + pooled_free_gb) - system_reserve_gb
+    )
+
+    # 5. 计算理论批次大小：可用空间 // 单张成本 (1.25 GB)
+    raw_bs: int = int(usable_gb // unit_cost_gb)
+
+    # 6. 受上限与剩余样本数截断，并用位运算对齐到 2 的幂次 (1, 2, 4, 8...)
+    target_bs: int = min(raw_bs, max_cap, num_samples)
+    if target_bs <= 1:
+        return 1
+
+    # 取 <= target_bs 的最大 2 的幂次 (例: 7 -> 4, 4 -> 4, 3 -> 2)
+    return 1 << (target_bs.bit_length() - 1)
+
+
+def save_image_task(
+    img: Image.Image,
+    cfg: PipelineConfig,
+    seed: int,
+    key: str,
+) -> None:
+    """后台线程异步执行 PNG 压缩与落盘，统一提供目录检查与 I/O 异常保护"""
+    if not cfg.outdir.is_dir():
+        logger.error(
+            f"输出目录不存在，跳过图片保存 (seed={seed}, key={key}): {cfg.outdir}"
+        )
+        return
+
+    out_file: str = cfg.format_filename(seed, key)
+    out_path: Path = cfg.outdir / out_file
+    try:
+        t0: float = time.time()
+        img.save(out_path)
+        logger.info(
+            f"{out_file} 保存完成 | 异步I/O: {time.time() - t0:.2f}s"
+        )
+    except OSError as e:
+        logger.error(f"{out_file} 保存失败: {e}")

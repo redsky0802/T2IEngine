@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from PIL import Image
 from typing import Any
 
 import zit  # noqa: F401  # 触发 ZitPipeline 子类注册
@@ -98,6 +99,9 @@ def main() -> None:
 
     # 锁定 glibc allocator
     lock_glibc_allocator()
+
+    # 预加载 Pillow 核心插件，杜绝后台多线程并发保存时的插件导入竞争
+    Image.preinit()
 
     init_ok, is_interactive, strategy, compile_mode, cfg_name, cfg = init_config()
     if not init_ok or cfg is None:
