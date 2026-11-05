@@ -4,6 +4,7 @@ import ctypes
 import gc
 import logging
 import os
+from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any, Callable
 
 import psutil
@@ -174,3 +175,10 @@ def inject_complex_probe(pipe: DiffusionPipeline) -> Callable[[], None] | None:
         logger.debug("复数张量检测 Hook 已移除")
 
     return remove_probe
+
+def resolve_attention_backend() -> str:
+    """探测运行环境是否包含 flash_attn，若未安装则回退至 PyTorch 原生 _native_flash"""
+    if find_spec("flash_attn") is not None:
+        return "flash"
+    logger.debug("未检测到 flash_attn，Attention 后端已自动回退至 _native_flash")
+    return "_native_flash"

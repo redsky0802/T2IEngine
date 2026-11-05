@@ -215,7 +215,24 @@ class PipelineConfig:
             self._executed_seeds.append(seed)
         return f"{self.prefix}-{seed}-{key}.png"
 
-    def dump_toml(self, is_final: bool = False) -> Path:
+    def prepare_outdir(self) -> bool:
+        """创建输出目录，若权限不足或路径非法则记录错误并返回 False"""
+        if not self.outdir.is_dir():
+            logger.info(f"已存在输出目录: {self.outdir}")
+            return True
+
+        try:
+            self.outdir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"成功准备输出目录: {self.outdir}")
+            return True
+        except PermissionError:
+            logger.error(f"权限不足，无法创建目录: {self.outdir}")
+            return False
+        except OSError as e:
+            logger.error(f"创建输出目录失败 ({self.outdir}): {e}")
+            return False
+
+    def dump_toml(self, is_final: bool = False) -> Path | None:
         """
         将当前配置（含展开后的 prompts）落盘至 outdir/{prefix}.toml。
         - is_final=False: 初始落盘，清空历史执行记录，原样写入配置。
@@ -223,6 +240,10 @@ class PipelineConfig:
         """
         if not is_final:
             self._executed_seeds.clear()
+
+        if not self.outdir.is_dir():
+            logger.error(f"输出目录不存在，跳过配置归档: {self.outdir}")
+            return None
 
         dump_path: Path = self.outdir / f"{self.prefix}.toml"
         toml_str: str = tomli_w.dumps(self.to_toml_dict())

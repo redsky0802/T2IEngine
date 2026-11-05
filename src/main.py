@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from typing import Any
 
@@ -113,11 +112,7 @@ def main() -> None:
             is_interactive, cfg_name, cfg.model_type, strategy, compile_mode
         )
 
-        try:
-            os.makedirs(cfg.outdir, exist_ok=True)
-            logger.info(f"成功创建目录: {cfg.outdir}")
-        except PermissionError:
-            logger.error(f"权限不足，无法创建目录: {cfg.outdir}")
+        if not cfg.prepare_outdir():
             sys.exit(1)
 
         if pipe is None:
@@ -172,11 +167,7 @@ def main() -> None:
                     if not cfg.prompt_generation_params():
                         continue
 
-                    try:
-                        os.makedirs(cfg.outdir, exist_ok=True)
-                        logger.info(f"成功创建目录: {cfg.outdir}")
-                    except PermissionError:
-                        logger.error(f"权限不足，无法创建目录: {cfg.outdir}")
+                    if not cfg.prepare_outdir():
                         continue
 
                     # 统一构建目标状态与管线调度
@@ -203,11 +194,7 @@ def main() -> None:
 
                     cfg = loaded_cfg
 
-                    try:
-                        os.makedirs(cfg.outdir, exist_ok=True)
-                        logger.info(f"成功创建目录: {cfg.outdir}")
-                    except PermissionError:
-                        logger.error(f"权限不足，无法创建目录: {cfg.outdir}")
+                    if not cfg.prepare_outdir():
                         continue
 
                     target_state = {

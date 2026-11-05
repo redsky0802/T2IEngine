@@ -19,6 +19,7 @@ from utils import (
     calculate_vae_batch_size,
     detach_mmap_tensors,
     inject_complex_probe,
+    resolve_attention_backend,
     vacuum_memory,
 )
 
@@ -189,8 +190,8 @@ class ZitPipeline(BasePipeline, model_type=ModelType.ZIT):
             )
             # detach_mmap_tensors(pipe)
 
-            pipe.transformer.set_attention_backend("flash")
-            # pipe.transformer.set_attention_backend("_native_flash")
+            attn_backend: str = resolve_attention_backend()
+            pipe.transformer.set_attention_backend(attn_backend)
 
             # pipe.remove_hook = inject_complex_probe(pipe)
             inject_real_rope_patch(pipe)
@@ -653,11 +654,10 @@ class ZitPipeline(BasePipeline, model_type=ModelType.ZIT):
         if not isinstance(cfg.prompts, dict) or not cfg.prompts:
             raise ValueError("prompts 参数必须为非空字典")
 
-        cfg.outdir.mkdir(parents=True, exist_ok=True)
-
         # 1. 出图前：写入展开后的初始配置，并重置内部种子收集器
-        dump_path: Path = cfg.dump_toml(is_final=False)
-        logger.debug(f"初始配置已落盘: {dump_path}")
+        dump_path: Path | None = cfg.dump_toml(is_final=False)
+        if dump_path is not None:
+            logger.debug(f"初始配置已落盘: {dump_path}")
 
         try:
             if self.strategy in (
@@ -673,5 +673,6 @@ class ZitPipeline(BasePipeline, model_type=ModelType.ZIT):
         finally:
             # 2. 出图后（或被中断时）：若已捕获到实际执行的种子，则回填更新配置文件
             if cfg._executed_seeds:
-                cfg.dump_toml(is_final=True)
-                logger.info(f"运行配置已归档至: {dump_path}")
+                dump_path: Path | None = cfg.dump_toml(is_final=True)
+                if dump_path is not None:
+                    logger.info(f"运行配置已归档至: {dump_path}")
