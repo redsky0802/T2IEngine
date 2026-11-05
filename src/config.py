@@ -217,7 +217,7 @@ class PipelineConfig:
 
     def prepare_outdir(self) -> bool:
         """创建输出目录，若权限不足或路径非法则记录错误并返回 False"""
-        if not self.outdir.is_dir():
+        if self.outdir.is_dir():
             logger.info(f"已存在输出目录: {self.outdir}")
             return True
 
